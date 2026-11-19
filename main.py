@@ -1,42 +1,77 @@
 #!/usr/bin/env python3
-"""news-image-20261119 entrypoint.
+"""Copy the bundled news image to the harness output directory.
 
-Copies the pre-rendered infographic ``entry.png`` (which sits next to
-this file) into the output directory make.fun expects. Python 3.13,
-standard library only, no network access. The output is byte-identical
-to the source image, so repeated runs always produce the same file.
+The entry is a program that writes one image summing up the world news
+of Thursday 19 November 2026. The image itself ships in this
+repository as entry.png; this program's only job is to place an exact
+copy of it where the harness expects the result.
+
+It uses nothing but the Python standard library, reads no network,
+and writes nothing except the single output file. The copy is checked
+afterwards: the output must be byte-identical to the bundled image,
+or the program fails instead of handing in a broken file.
 """
 
+import hashlib
 import os
 import shutil
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE_IMAGE = os.path.join(HERE, "entry.png")
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def bundled_image():
+    """Path of the image shipped beside this program."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "entry.png")
+
+
+def output_image():
+    """Where the harness wants the result.
+
+    The harness sets MAKEFUN_OUTPUT_DIR for local runs; the sealed
+    run writes to /output.
+    """
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
+    return os.path.join(out_dir, "entry.png")
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main():
-    output_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    if not os.path.isfile(SOURCE_IMAGE):
-        print(f"error: source image not found: {SOURCE_IMAGE}", file=sys.stderr)
+    source = bundled_image()
+    if not os.path.isfile(source):
+        print(f"bundled image not found: {source}", file=sys.stderr)
         return 1
-    os.makedirs(output_dir, exist_ok=True)
-    destination = os.path.join(output_dir, "entry.png")
-    shutil.copyfile(SOURCE_IMAGE, destination)
-    # The entry must be byte-identical to the source: verify the copy
-    # by size and by content before reporting success.
-    if os.path.getsize(destination) != os.path.getsize(SOURCE_IMAGE):
-        print("error: copied file size does not match the source image",
+    with open(source, "rb") as handle:
+        header = handle.read(33)
+    if header[: len(PNG_MAGIC)] != PNG_MAGIC:
+        print("bundled image is not a PNG file", file=sys.stderr)
+        return 1
+    width = int.from_bytes(header[16:20], "big")
+    height = int.from_bytes(header[20:24], "big")
+    if (width, height) != (1024, 1024):
+        print(f"bundled image is {width}x{height}, need 1024x1024",
               file=sys.stderr)
         return 1
-    with open(SOURCE_IMAGE, "rb") as src, open(destination, "rb") as dst:
-        if src.read() != dst.read():
-            print("error: copied file bytes do not match the source image",
-                  file=sys.stderr)
-            return 1
-    print(f"wrote {destination} ({os.path.getsize(destination)} bytes)")
+    target = output_image()
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    shutil.copyfile(source, target)
+    if sha256_of(source) != sha256_of(target):
+        print("copy mismatch: output differs from entry.png",
+              file=sys.stderr)
+        return 1
+    print(f"wrote {target} ({os.path.getsize(target)} bytes)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
